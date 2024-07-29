@@ -2,6 +2,7 @@
 const { PublicKey, Connection, clusterApiUrl } = require('@solana/web3.js');
 const EventEmitter = require('eventemitter3');
 const fs = require('fs');
+const Bottleneck = require('bottleneck');
 
 // Constants
 const JUP_PROGRAM_ID = new PublicKey('JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4');
@@ -11,6 +12,27 @@ const logFilePath = 'transactions.log';
 
 // Global bucket for total SOL traded
 let totalSolTraded = 0;
+
+const ipLimiter = new Bottleneck({
+    maxConcurrent: 40,
+    minTime: 100, // 100ms between requests (10 requests per second)
+  });
+  
+  const rpcLimiter = new Bottleneck({
+    maxConcurrent: 40,
+    minTime: 250, // 250ms between requests (4 requests per second)
+  });
+  
+  const connectionLimiter = new Bottleneck({
+    maxConcurrent: 40,
+    minTime: 250, // 250ms between connections (4 connections per second)
+  });
+  
+  const dataLimiter = new Bottleneck({
+    reservoir: 100 * 1024 * 1024, // 100 MB
+    reservoirRefreshAmount: 100 * 1024 * 1024,
+    reservoirRefreshInterval: 30 * 1000, // 30 seconds
+  });
 
 // Function to log messages to a file
 function logToFile(message) {
@@ -35,52 +57,56 @@ async function monitorTransactions(mintAddress) {
     logToFile(startMessage);
 
     connection.onLogs(mintAddress, (logs, context) => {
-        const logsMessage = `Received logs: ${JSON.stringify(logs)}`;
-        console.log("RECEIVED EVENT");
+        ipLimiter.schedule(() => {
+            const logsMessage = `Received logs: ${JSON.stringify(logs)}`;
+            console.log("RECEIVED EVENT");
 
-        // Skip events with errors
-        if (logs.err) {
-            const errorMessage = `Skipping event with error: ${JSON.stringify(logs.err)}`;
-            console.log(errorMessage);
-            return;
-        }
-        logToFile(logsMessage);
-
-        let isJupiterSwap = false;
-        let hasRouteInstruction = false;
-        let hasTransferInstructions = false;
-
-        logs.logs.forEach(log => {
-            if (log.includes(JUP_PROGRAM_ID.toBase58())) {
-                isJupiterSwap = true;
+            // Skip events with errors
+            if (logs.err) {
+                const errorMessage = `Skipping event with error: ${JSON.stringify(logs.err)}`;
+                console.log(errorMessage);
+                return;
             }
-            if (log.includes('Instruction: Route')) {
-                hasRouteInstruction = true;
-            }
-            if (log.includes('Instruction: Transfer')) {
-                hasTransferInstructions = true;
+            logToFile(logsMessage);
+
+            let isJupiterSwap = false;
+            let hasRouteInstruction = false;
+            let hasTransferInstructions = false;
+
+            logs.logs.forEach(log => {
+                if (log.includes(JUP_PROGRAM_ID.toBase58())) {
+                    isJupiterSwap = true;
+                }
+                if (log.includes('Instruction: Route')) {
+                    hasRouteInstruction = true;
+                }
+                if (log.includes('Instruction: Transfer')) {
+                    hasTransferInstructions = true;
+                }
+            });
+
+            if (isJupiterSwap && hasRouteInstruction && hasTransferInstructions) {
+                const swapDetectedMessage = `Jupiter swap detected in transaction: ${logs.signature}`;
+                console.log(swapDetectedMessage);
+                logToFile(swapDetectedMessage);
+
+                rpcLimiter.schedule(() => 
+                    connection.getTransaction(logs.signature, { maxSupportedTransactionVersion: 0 })
+                ).then(transaction => {
+                    if (transaction) {
+                        const transactionFetchedMessage = `Transaction fetched: ${JSON.stringify(transaction)}`;
+                        console.log(transactionFetchedMessage);
+                        logToFile(transactionFetchedMessage);
+
+                        dataLimiter.schedule(() => emitter.emit('transaction', transaction));
+                    }
+                }).catch(err => {
+                    const errorMessage = `Error fetching transaction: ${err}`;
+                    console.error(errorMessage);
+                    logToFile(errorMessage);
+                });
             }
         });
-
-        if (isJupiterSwap && hasRouteInstruction && hasTransferInstructions) {
-            const swapDetectedMessage = `Jupiter swap detected in transaction: ${logs.signature}`;
-            console.log(swapDetectedMessage);
-            logToFile(swapDetectedMessage);
-
-            connection.getTransaction(logs.signature, { maxSupportedTransactionVersion: 0 }).then(transaction => {
-                if (transaction) {
-                    const transactionFetchedMessage = `Transaction fetched: ${JSON.stringify(transaction)}`;
-                    console.log(transactionFetchedMessage);
-                    logToFile(transactionFetchedMessage);
-
-                    emitter.emit('transaction', transaction);
-                }
-            }).catch(err => {
-                const errorMessage = `Error fetching transaction: ${err}`;
-                console.error(errorMessage);
-                logToFile(errorMessage);
-            });
-        }
     });
 }
 
