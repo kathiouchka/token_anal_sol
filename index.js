@@ -16,23 +16,18 @@ let totalSolTraded = 0;
 const ipLimiter = new Bottleneck({
     maxConcurrent: 40,
     minTime: 100, // 100ms between requests (10 requests per second)
-  });
-  
-  const rpcLimiter = new Bottleneck({
-    maxConcurrent: 40,
-    minTime: 250, // 250ms between requests (4 requests per second)
-  });
-  
-  const connectionLimiter = new Bottleneck({
-    maxConcurrent: 40,
-    minTime: 250, // 250ms between connections (4 connections per second)
-  });
-  
-  const dataLimiter = new Bottleneck({
+});
+
+const rpcLimiter = new Bottleneck({
+    maxConcurrent: 20,
+    minTime: 500, // 500ms between requests (2 requests per second)
+});
+
+const dataLimiter = new Bottleneck({
     reservoir: 100 * 1024 * 1024, // 100 MB
     reservoirRefreshAmount: 100 * 1024 * 1024,
     reservoirRefreshInterval: 30 * 1000, // 30 seconds
-  });
+});
 
 // Function to log messages to a file
 function logToFile(message) {
@@ -51,12 +46,23 @@ function getTokenMintAddress() {
 }
 
 // Function to monitor transactions for a specific mint address
+const transactionQueue = new Bottleneck({
+    maxConcurrent: 1, // Process one transaction at a time
+    minTime: 1000 // Wait at least 1 second between processing transactions
+});
+
 async function monitorTransactions(mintAddress) {
     const startMessage = `Starting to monitor transactions for mint address: ${mintAddress.toBase58()}`;
     console.log(startMessage);
     logToFile(startMessage);
 
     connection.onLogs(mintAddress, (logs, context) => {
+        transactionQueue.schedule(() => processLogs(logs));
+    });
+}
+
+function processLogs(logs) {
+    return new Promise((resolve) => {
         ipLimiter.schedule(() => {
             const logsMessage = `Received logs: ${JSON.stringify(logs)}`;
             console.log("RECEIVED EVENT");
@@ -65,7 +71,7 @@ async function monitorTransactions(mintAddress) {
             if (logs.err) {
                 const errorMessage = `Skipping event with error: ${JSON.stringify(logs.err)}`;
                 console.log(errorMessage);
-                return;
+                return resolve();
             }
             logToFile(logsMessage);
 
@@ -100,11 +106,15 @@ async function monitorTransactions(mintAddress) {
 
                         dataLimiter.schedule(() => emitter.emit('transaction', transaction));
                     }
+                    resolve(); // Resolve the promise after processing
                 }).catch(err => {
                     const errorMessage = `Error fetching transaction: ${err}`;
                     console.error(errorMessage);
                     logToFile(errorMessage);
+                    resolve(); // Resolve the promise even if there's an error
                 });
+            } else {
+                resolve(); // Resolve the promise if it's not a Jupiter swap
             }
         });
     });
@@ -115,13 +125,13 @@ function getSolAmountFromTransaction(meta) {
     const solMint = 'So11111111111111111111111111111111111111112';
     const preSolBalance = meta.preTokenBalances.find(balance => balance.mint === solMint);
     const postSolBalance = meta.postTokenBalances.find(balance => balance.mint === solMint);
-    
+
     if (preSolBalance && postSolBalance) {
         const preAmount = parseFloat(preSolBalance.uiTokenAmount.uiAmountString);
         const postAmount = parseFloat(postSolBalance.uiTokenAmount.uiAmountString);
         return Math.abs(postAmount - preAmount);
     }
-    
+
     return 0;
 }
 
@@ -158,7 +168,7 @@ emitter.on('transaction', (transaction) => {
 
         // Check if instructions exist and is an array
         if (Array.isArray(message.compiledInstructions)) {
-            const jupiterInstruction = message.compiledInstructions.find(instr => 
+            const jupiterInstruction = message.compiledInstructions.find(instr =>
                 message.staticAccountKeys[instr.programIdIndex].equals(JUP_PROGRAM_ID)
             );
 
