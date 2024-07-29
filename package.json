@@ -1,0 +1,17 @@
+{
+  "name": "solana-token-analyzer",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.mjs",
+  "scripts": {
+    "start": "node index.mjs"
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.30.2",
+    "chalk": "^5.0.0",
+    "eventemitter3": "^4.0.7",
+    "winston": "^3.3.3"
+  },
+  "author": "",
+  "license": "ISC"
+}
