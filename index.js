@@ -15,11 +15,6 @@ const logFilePath = 'transactions.log';
 // Global bucket for total SOL traded
 let totalSolTraded = 0;
 
-const ipLimiter = new Bottleneck({
-    maxConcurrent: 40,
-    minTime: 100, // 100ms between requests (10 requests per second)
-});
-
 const rpcLimiter = new Bottleneck({
     maxConcurrent: 10,
     minTime: 100, // 500ms between requests (2 requests per second)
@@ -47,11 +42,6 @@ function getTokenMintAddress() {
     return new PublicKey(process.argv[2]);
 }
 
-// Function to monitor transactions for a specific mint address
-const transactionQueue = new Bottleneck({
-    maxConcurrent: 1, // Process one transaction at a time
-    minTime: 1000 // Wait at least 1 second between processing transactions
-});
 
 async function monitorTransactions(mintAddress) {
     const startMessage = `Starting to monitor transactions for mint address: ${mintAddress.toBase58()}`;
