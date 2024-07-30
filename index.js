@@ -54,14 +54,13 @@ async function monitorTransactions(mintAddress) {
 }
 
 function processLogs(logs) {
-    console.log("RECEIVED EVENT");
 
     // Skip events with errors
+    logToFile(`Received logs: ${JSON.stringify(logs)}`);
     if (logs.err) {
-        console.log(`Skipping event with error: ${JSON.stringify(logs.err)}`);
+        // console.log(`Skipping event with error: ${JSON.stringify(logs.err)}`);
         return;
     }
-    logToFile(`Received logs: ${JSON.stringify(logs)}`);
 
     let isJupiterSwap = false;
     let hasRouteInstruction = false;
@@ -80,15 +79,13 @@ function processLogs(logs) {
     });
 
     if (isJupiterSwap && hasRouteInstruction && hasTransferInstructions) {
-        console.log(`Jupiter swap detected in transaction: ${logs.signature}`);
+        // console.log(`Jupiter swap detected in transaction: ${logs.signature}`);
         logToFile(`Jupiter swap detected in transaction: ${logs.signature}`);
 
         rpcLimiter.schedule(() => 
             connection.getTransaction(logs.signature, { maxSupportedTransactionVersion: 0 })
         ).then(transaction => {
             if (transaction) {
-                console.log(`Transaction fetched: ${JSON.stringify(transaction)}`);
-                logToFile(`Transaction fetched: ${JSON.stringify(transaction)}`);
                 dataLimiter.schedule(() => emitter.emit('transaction', transaction));
             }
         }).catch(err => {
@@ -99,7 +96,7 @@ function processLogs(logs) {
 }
 
 // Function to extract SOL amount from transaction
-function getSolAmountFromTransaction(meta) {
+function getSolAmountFromTransactioniAndOwner(meta) {
     const solMint = 'So11111111111111111111111111111111111111112';
     const preSolBalance = meta.preTokenBalances.find(balance => balance.mint === solMint);
     const postSolBalance = meta.postTokenBalances.find(balance => balance.mint === solMint);
@@ -107,13 +104,19 @@ function getSolAmountFromTransaction(meta) {
     if (preSolBalance && postSolBalance) {
         const preAmount = parseFloat(preSolBalance.uiTokenAmount.uiAmountString);
         const postAmount = parseFloat(postSolBalance.uiTokenAmount.uiAmountString);
-        return Math.abs(postAmount - preAmount);
+        const owner = preSolBalance.owner;
+        return {
+            solAmount: Math.abs(postAmount - preAmount),
+            owner: owner,
+         };
     }
 
-    return 0;
+    return {
+        solAmount: 0,
+        owner: null
+    }
 }
 
-// Function to check if the amount is valid
 function isValidAmount(amount) {
     return amount !== 0 && isFinite(amount);
 }
@@ -137,7 +140,7 @@ emitter.on('transaction', (transaction) => {
     logToFile(transactionProcessingMessage);
 
     const transactionDataMessage = `Transaction data: ${JSON.stringify(transaction)}`;
-    console.log(transactionDataMessage);
+    // console.log(transactionDataMessage);
     logToFile(transactionDataMessage);
 
     // Check if transaction and meta exist
@@ -152,19 +155,24 @@ emitter.on('transaction', (transaction) => {
 
             if (jupiterInstruction) {
                 const jupiterInstructionMessage = 'Transaction contains Jupiter swap instruction.';
-                console.log(jupiterInstructionMessage);
+                // console.log(jupiterInstructionMessage);
                 logToFile(jupiterInstructionMessage);
 
-                const solAmount = getSolAmountFromTransaction(meta);
+                const { solAmount, owner } = getSolAmountFromTransactioniAndOwner(meta);
                 const solAmountDetectedMessage = `SOL amount detected: ${solAmount}`;
                 console.log(solAmountDetectedMessage);
                 logToFile(solAmountDetectedMessage);
 
                 if (isValidAmount(solAmount)) {
-                    const validSolAmountMessage = `Valid SOL amount: ${solAmount}`;
-                    console.log(validSolAmountMessage);
-                    logToFile(validSolAmountMessage);
-                    updateBucket(solAmount);
+                    const roundedAmount = Math.round(solAmount * 10) / 10;
+                    if (Math.abs(solAmount - roundedAmount) < 0.00001) {
+                        const humanTransactionMessage = `Human transaction detected: Address ${owner} bought ${solAmount.toFixed(1)} SOL`;
+
+                        console.log(humanTransactionMessage);
+
+                        logToFile(humanTransactionMessage);
+                        updateBucket(solAmount);
+                    }
                 } else {
                     const invalidSolAmountMessage = `Invalid SOL amount: ${solAmount}`;
                     console.log(invalidSolAmountMessage);
