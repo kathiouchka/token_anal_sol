@@ -9,7 +9,7 @@
   "dependencies": {
     "@solana/web3.js": "^1.30.2",
     "bottleneck": "^2.19.5",
-    "chalk": "^5.0.0",
+    "chalk": "^4.1.2",
     "dotenv": "^16.4.5",
     "eventemitter3": "^4.0.7",
     "winston": "^3.3.3"

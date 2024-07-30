@@ -3,6 +3,7 @@ const { PublicKey, Connection, clusterApiUrl } = require('@solana/web3.js');
 const EventEmitter = require('eventemitter3');
 const fs = require('fs');
 const Bottleneck = require('bottleneck');
+const chalk = require('chalk');
 
 require('dotenv').config();
 
@@ -11,6 +12,7 @@ const JUP_PROGRAM_ID = new PublicKey('JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV
 const connection = new Connection(`https://mainnet.helius-rpc.com/?api-key=${process.env.API_KEY}`);
 const emitter = new EventEmitter();
 const logFilePath = 'transactions.log';
+const processedSignatures = new Set();
 
 // Global bucket for total SOL traded
 let totalSolTraded = 0;
@@ -56,11 +58,18 @@ async function monitorTransactions(mintAddress) {
 function processLogs(logs) {
 
     // Skip events with errors
-    logToFile(`Received logs: ${JSON.stringify(logs)}`);
     if (logs.err) {
-        // console.log(`Skipping event with error: ${JSON.stringify(logs.err)}`);
         return;
     }
+
+    // Check if the signature has already been processed
+    if (processedSignatures.has(logs.signature)) {
+        // console.log(chalk.yellow(`Skipping already processed signature: ${logs.signature}`));
+        return;
+    }
+
+    processedSignatures.add(logs.signature);
+    logToFile(`Received logs: ${JSON.stringify(logs)}`);
 
     let isJupiterSwap = false;
     let hasRouteInstruction = false;
@@ -79,17 +88,18 @@ function processLogs(logs) {
     });
 
     if (isJupiterSwap && hasRouteInstruction && hasTransferInstructions) {
-        // console.log(`Jupiter swap detected in transaction: ${logs.signature}`);
+        console.log(chalk.cyan(`Jupiter swap detected in transaction: ${logs.signature}`));
         logToFile(`Jupiter swap detected in transaction: ${logs.signature}`);
 
-        rpcLimiter.schedule(() => 
+        rpcLimiter.schedule(() =>
             connection.getTransaction(logs.signature, { maxSupportedTransactionVersion: 0 })
         ).then(transaction => {
             if (transaction) {
+                logToFile(`Transaction fetched: ${JSON.stringify(transaction)}`);
                 dataLimiter.schedule(() => emitter.emit('transaction', transaction));
             }
         }).catch(err => {
-            console.error(`Error fetching transaction: ${err}`);
+            console.error(chalk.red(`Error fetching transaction: ${err}`));
             logToFile(`Error fetching transaction: ${err}`);
         });
     }
@@ -104,17 +114,9 @@ function getSolAmountFromTransactioniAndOwner(meta) {
     if (preSolBalance && postSolBalance) {
         const preAmount = parseFloat(preSolBalance.uiTokenAmount.uiAmountString);
         const postAmount = parseFloat(postSolBalance.uiTokenAmount.uiAmountString);
-        const owner = preSolBalance.owner;
-        return {
-            solAmount: Math.abs(postAmount - preAmount),
-            owner: owner,
-         };
+        return Math.abs(postAmount - preAmount);
     }
-
-    return {
-        solAmount: 0,
-        owner: null
-    }
+    return 0
 }
 
 function isValidAmount(amount) {
@@ -129,18 +131,15 @@ function updateBucket(amount) {
 
 function displayBucket() {
     const bucketMessage = `Total SOL Traded: ${totalSolTraded.toFixed(4)}`;
-    console.log(bucketMessage);
+    console.log(chalk.green(bucketMessage));
     logToFile(bucketMessage);
 }
 
 // Event listener for transactions
 emitter.on('transaction', (transaction) => {
-    const transactionProcessingMessage = `Processing transaction: ${transaction.transaction.signatures[0]}`;
-    console.log(transactionProcessingMessage);
-    logToFile(transactionProcessingMessage);
 
     const transactionDataMessage = `Transaction data: ${JSON.stringify(transaction)}`;
-    // console.log(transactionDataMessage);
+    // console.log(chalk.blue(transactionDataMessage));
     logToFile(transactionDataMessage);
 
     // Check if transaction and meta exist
@@ -154,41 +153,38 @@ emitter.on('transaction', (transaction) => {
             );
 
             if (jupiterInstruction) {
-                const jupiterInstructionMessage = 'Transaction contains Jupiter swap instruction.';
-                // console.log(jupiterInstructionMessage);
-                logToFile(jupiterInstructionMessage);
 
-                const { solAmount, owner } = getSolAmountFromTransactioniAndOwner(meta);
+                const solAmount = getSolAmountFromTransactioniAndOwner(meta);
                 const solAmountDetectedMessage = `SOL amount detected: ${solAmount}`;
-                console.log(solAmountDetectedMessage);
+                console.log(chalk.cyan(solAmountDetectedMessage));
                 logToFile(solAmountDetectedMessage);
 
                 if (isValidAmount(solAmount)) {
                     const roundedAmount = Math.round(solAmount * 10) / 10;
                     if (Math.abs(solAmount - roundedAmount) < 0.00001) {
-                        const humanTransactionMessage = `Human transaction detected: Address ${owner} bought ${solAmount.toFixed(1)} SOL`;
+                        const humanTransactionMessage = `Human transaction detected: Address ${transaction.message.staticAccountKeys[0]} bought ${solAmount.toFixed(1)} SOL`;
 
-                        console.log(humanTransactionMessage);
+                        console.log(chalk.green(humanTransactionMessage));
 
                         logToFile(humanTransactionMessage);
                         updateBucket(solAmount);
                     }
                 } else {
                     const invalidSolAmountMessage = `Invalid SOL amount: ${solAmount}`;
-                    console.log(invalidSolAmountMessage);
+                    console.log(chalk.red(invalidSolAmountMessage));
                     logToFile(invalidSolAmountMessage);
                 }
             } else {
                 const noJupiterInstructionMessage = 'Transaction does not contain Jupiter swap instruction.';
-                console.log(noJupiterInstructionMessage);
+                console.log(chalk.yellow(noJupiterInstructionMessage));
                 logToFile(noJupiterInstructionMessage);
             }
         } else {
-            console.log('Transaction instructions are missing or not an array');
+            console.log(chalk.red('Transaction instructions are missing or not an array'));
             logToFile('Transaction instructions are missing or not an array');
         }
     } else {
-        console.log('Transaction structure is not as expected');
+        console.log(chalk.red('Transaction structure is not as expected'));
         logToFile('Transaction structure is not as expected');
     }
 });
