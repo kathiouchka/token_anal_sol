@@ -4,9 +4,11 @@ const EventEmitter = require('eventemitter3');
 const fs = require('fs');
 const Bottleneck = require('bottleneck');
 
+require('dotenv').config();
+
 // Constants
 const JUP_PROGRAM_ID = new PublicKey('JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4');
-const connection = new Connection(clusterApiUrl('mainnet-beta'));
+const connection = new Connection(`https://mainnet.helius-rpc.com/?api-key=${process.env.API_KEY}`);
 const emitter = new EventEmitter();
 const logFilePath = 'transactions.log';
 
@@ -19,8 +21,8 @@ const ipLimiter = new Bottleneck({
 });
 
 const rpcLimiter = new Bottleneck({
-    maxConcurrent: 20,
-    minTime: 500, // 500ms between requests (2 requests per second)
+    maxConcurrent: 10,
+    minTime: 100, // 500ms between requests (2 requests per second)
 });
 
 const dataLimiter = new Bottleneck({
@@ -57,67 +59,53 @@ async function monitorTransactions(mintAddress) {
     logToFile(startMessage);
 
     connection.onLogs(mintAddress, (logs, context) => {
-        transactionQueue.schedule(() => processLogs(logs));
+        processLogs(logs);
     });
 }
 
 function processLogs(logs) {
-    return new Promise((resolve) => {
-        ipLimiter.schedule(() => {
-            const logsMessage = `Received logs: ${JSON.stringify(logs)}`;
-            console.log("RECEIVED EVENT");
+    console.log("RECEIVED EVENT");
 
-            // Skip events with errors
-            if (logs.err) {
-                const errorMessage = `Skipping event with error: ${JSON.stringify(logs.err)}`;
-                console.log(errorMessage);
-                return resolve();
-            }
-            logToFile(logsMessage);
+    // Skip events with errors
+    if (logs.err) {
+        console.log(`Skipping event with error: ${JSON.stringify(logs.err)}`);
+        return;
+    }
+    logToFile(`Received logs: ${JSON.stringify(logs)}`);
 
-            let isJupiterSwap = false;
-            let hasRouteInstruction = false;
-            let hasTransferInstructions = false;
+    let isJupiterSwap = false;
+    let hasRouteInstruction = false;
+    let hasTransferInstructions = false;
 
-            logs.logs.forEach(log => {
-                if (log.includes(JUP_PROGRAM_ID.toBase58())) {
-                    isJupiterSwap = true;
-                }
-                if (log.includes('Instruction: Route')) {
-                    hasRouteInstruction = true;
-                }
-                if (log.includes('Instruction: Transfer')) {
-                    hasTransferInstructions = true;
-                }
-            });
-
-            if (isJupiterSwap && hasRouteInstruction && hasTransferInstructions) {
-                const swapDetectedMessage = `Jupiter swap detected in transaction: ${logs.signature}`;
-                console.log(swapDetectedMessage);
-                logToFile(swapDetectedMessage);
-
-                rpcLimiter.schedule(() => 
-                    connection.getTransaction(logs.signature, { maxSupportedTransactionVersion: 0 })
-                ).then(transaction => {
-                    if (transaction) {
-                        const transactionFetchedMessage = `Transaction fetched: ${JSON.stringify(transaction)}`;
-                        console.log(transactionFetchedMessage);
-                        logToFile(transactionFetchedMessage);
-
-                        dataLimiter.schedule(() => emitter.emit('transaction', transaction));
-                    }
-                    resolve(); // Resolve the promise after processing
-                }).catch(err => {
-                    const errorMessage = `Error fetching transaction: ${err}`;
-                    console.error(errorMessage);
-                    logToFile(errorMessage);
-                    resolve(); // Resolve the promise even if there's an error
-                });
-            } else {
-                resolve(); // Resolve the promise if it's not a Jupiter swap
-            }
-        });
+    logs.logs.forEach(log => {
+        if (log.includes(JUP_PROGRAM_ID.toBase58())) {
+            isJupiterSwap = true;
+        }
+        if (log.includes('Instruction: Route')) {
+            hasRouteInstruction = true;
+        }
+        if (log.includes('Instruction: Transfer')) {
+            hasTransferInstructions = true;
+        }
     });
+
+    if (isJupiterSwap && hasRouteInstruction && hasTransferInstructions) {
+        console.log(`Jupiter swap detected in transaction: ${logs.signature}`);
+        logToFile(`Jupiter swap detected in transaction: ${logs.signature}`);
+
+        rpcLimiter.schedule(() => 
+            connection.getTransaction(logs.signature, { maxSupportedTransactionVersion: 0 })
+        ).then(transaction => {
+            if (transaction) {
+                console.log(`Transaction fetched: ${JSON.stringify(transaction)}`);
+                logToFile(`Transaction fetched: ${JSON.stringify(transaction)}`);
+                dataLimiter.schedule(() => emitter.emit('transaction', transaction));
+            }
+        }).catch(err => {
+            console.error(`Error fetching transaction: ${err}`);
+            logToFile(`Error fetching transaction: ${err}`);
+        });
+    }
 }
 
 // Function to extract SOL amount from transaction
