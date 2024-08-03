@@ -120,7 +120,7 @@ function getSolAmountFromTransactioniAndOwner(meta) {
 }
 
 function isValidAmount(amount) {
-    return amount !== 0 && isFinite(amount);
+    return amount !== 0 && isFinite(amount) && amount < 10;
 }
 
 // Function to update the bucket and display it
@@ -154,6 +154,7 @@ emitter.on('transaction', (transaction) => {
 
             if (jupiterInstruction) {
 
+                const buyerAddress = message.staticAccountKeys[0];
                 const solAmount = getSolAmountFromTransactioniAndOwner(meta);
                 const solAmountDetectedMessage = `SOL amount detected: ${solAmount}`;
                 console.log(chalk.cyan(solAmountDetectedMessage));
@@ -162,7 +163,7 @@ emitter.on('transaction', (transaction) => {
                 if (isValidAmount(solAmount)) {
                     const roundedAmount = Math.round(solAmount * 10) / 10;
                     if (Math.abs(solAmount - roundedAmount) < 0.00001) {
-                        const humanTransactionMessage = `Human transaction detected: Address ${transaction.message.staticAccountKeys[0]} bought ${solAmount.toFixed(1)} SOL`;
+                        const humanTransactionMessage = `Human transaction detected: Address ${buyerAddress} bought ${solAmount.toFixed(1)} SOL`;
 
                         console.log(chalk.green(humanTransactionMessage));
 
